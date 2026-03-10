@@ -1,34 +1,59 @@
 import { useState, useMemo } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer, Legend } from "recharts";
 
-const CFRP_BULK = 1600; // kg/m3
-const G = 9.81;
+const CFRP_BULK = 1600; // kg/m3, mid-range aerospace CFRP
+const CFRP_E = 70e9; // Pa, quasi-isotropic laminate (~50-70 GPa typical)
+const CFRP_NU = 0.3; // Poisson's ratio
+const P_ATM_SEA = 101325; // Pa, sea-level atmospheric pressure
 
 function airDensityAtAltitude(alt_m) {
-  // Standard atmosphere approximation
   return 1.225 * Math.exp(-alt_m / 8500);
 }
 
-function calcSphere(radius, gyroidFill, internalPressureFrac, matDensityOverride, altitude_m) {
+function atmPressureAtAltitude(alt_m) {
+  return P_ATM_SEA * Math.exp(-alt_m / 8500);
+}
+
+function calcSphere(radius, gyroidFill, internalPressureFrac, matDensityOverride, altitude_m, shellT, knockdown) {
   const rho_air = airDensityAtAltitude(altitude_m);
   const rho_inside = rho_air * internalPressureFrac;
-  const effectiveShellDensity = matDensityOverride * (gyroidFill / 100);
+  const rhoRel = gyroidFill / 100;
+  const effectiveShellDensity = matDensityOverride * rhoRel;
 
   const V_total = (4 / 3) * Math.PI * radius ** 3;
   const A_surface = 4 * Math.PI * radius ** 2;
 
-  // Shell thickness for neutral buoyancy (just shell, no payload)
-  // rho_air * V = effectiveShellDensity * A * t + rho_inside * V
-  // t = (rho_air - rho_inside) * V / (effectiveShellDensity * A)
+  // Neutral buoyancy shell thickness
   const neutralT = ((rho_air - rho_inside) * V_total) / (effectiveShellDensity * A_surface);
 
-  return { rho_air, V_total, A_surface, neutralT, effectiveShellDensity };
+  // Gyroid effective E: quadratic scaling with relative density (bending-dominated, governs buckling)
+  const E_eff = rhoRel ** 2 * CFRP_E;
+
+  // Zoelly (1915) critical buckling pressure for thin sphere under external pressure
+  const P_cr = (2 * E_eff / Math.sqrt(3 * (1 - CFRP_NU ** 2))) * (shellT / radius) ** 2;
+
+  // Design buckling pressure with knockdown for geometric imperfections
+  const P_buckle = knockdown * P_cr;
+
+  // Net external pressure the shell must resist
+  const P_atm = atmPressureAtAltitude(altitude_m);
+  const P_net = P_atm * (1 - internalPressureFrac);
+
+  const bucklingSF = P_net > 0 ? P_buckle / P_net : Infinity;
+
+  return { rho_air, V_total, A_surface, neutralT, effectiveShellDensity, E_eff, P_cr, P_buckle, P_net, bucklingSF, P_atm };
 }
 
 function formatNum(n, decimals = 2) {
   if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(decimals) + "M";
   if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(decimals) + "k";
   return n.toFixed(decimals);
+}
+
+function formatPressure(pa) {
+  if (pa >= 1e6) return (pa / 1e6).toFixed(1) + " MPa";
+  if (pa >= 1e3) return (pa / 1e3).toFixed(1) + " kPa";
+  return pa.toFixed(0) + " Pa";
 }
 
 const Stat = ({ label, value, unit, highlight, warn }) => (
@@ -63,41 +88,63 @@ export default function VacuumAirshipCalc() {
   const [gyroidFill, setGyroidFill] = useState(10);
   const [internalPressure, setInternalPressure] = useState(20);
   const [shellThicknessCm, setShellThicknessCm] = useState(3);
-  const [altitude, setAltitude] = useState(3048); // 10,000 ft
+  const [altitude, setAltitude] = useState(3048);
+  const [knockdown, setKnockdown] = useState(0.2);
 
   const matDensity = CFRP_BULK;
+  const shellT = shellThicknessCm / 100;
 
-  const { rho_air, V_total, A_surface, neutralT, effectiveShellDensity } = useMemo(
-    () => calcSphere(radius, gyroidFill, internalPressure / 100, matDensity, altitude),
-    [radius, gyroidFill, internalPressure, altitude]
+  const result = useMemo(
+    () => calcSphere(radius, gyroidFill, internalPressure / 100, matDensity, altitude, shellT, knockdown),
+    [radius, gyroidFill, internalPressure, altitude, shellT, knockdown]
   );
 
-  const shellT = shellThicknessCm / 100;
+  const { rho_air, V_total, A_surface, neutralT, effectiveShellDensity, E_eff, P_cr, P_buckle, P_net, bucklingSF } = result;
+
   const shellVolume = A_surface * shellT;
   const shellMass = effectiveShellDensity * shellVolume;
   const internalAirMass = rho_air * (internalPressure / 100) * V_total;
-  const totalStructureMass = shellMass + internalAirMass;
   const displacedAirMass = rho_air * V_total;
-  const netLiftKg = displacedAirMass - totalStructureMass;
+  const netLiftKg = displacedAirMass - shellMass - internalAirMass;
   const netLiftTonnes = netLiftKg / 1000;
   const neutralThicknessCm = neutralT * 100;
 
-  const feasible = netLiftKg > 0;
+  const hasLift = netLiftKg > 0;
+  const survivesBuckling = bucklingSF >= 1.0;
+  const feasible = hasLift && survivesBuckling;
 
-  // Chart: net lift vs radius for current settings
   const chartData = useMemo(() => {
     return Array.from({ length: 60 }, (_, i) => {
       const r = 1 + i * 2;
-      const { rho_air: ra, V_total: V, A_surface: A, effectiveShellDensity: esd } = calcSphere(r, gyroidFill, internalPressure / 100, matDensity, altitude);
-      const sV = A * shellT;
-      const sM = esd * sV;
-      const iM = ra * (internalPressure / 100) * V;
-      const lift = ra * V - sM - iM;
-      return { r, lift: lift / 1000, liftRaw: lift };
+      const res = calcSphere(r, gyroidFill, internalPressure / 100, matDensity, altitude, shellT, knockdown);
+      const sM = res.effectiveShellDensity * res.A_surface * shellT;
+      const iM = res.rho_air * (internalPressure / 100) * res.V_total;
+      const lift = res.rho_air * res.V_total - sM - iM;
+      return {
+        r,
+        lift: lift / 1000,
+        liftRaw: lift,
+        sf: Math.min(res.bucklingSF, 10),
+      };
     });
-  }, [gyroidFill, internalPressure, shellT, altitude]);
+  }, [gyroidFill, internalPressure, shellT, altitude, knockdown]);
 
   const breakeven = chartData.find(d => d.liftRaw > 0)?.r;
+
+  let statusLabel, statusColor;
+  if (feasible) {
+    statusLabel = "▲ POSITIVE LIFT + STRUCTURALLY SOUND";
+    statusColor = "#00ffb4";
+  } else if (hasLift && !survivesBuckling) {
+    statusLabel = "▼ FLOATS BUT BUCKLES — SHELL COLLAPSES";
+    statusColor = "#ff6060";
+  } else if (!hasLift && survivesBuckling) {
+    statusLabel = "▼ STRONG BUT TOO HEAVY — SINKS";
+    statusColor = "#ff6060";
+  } else {
+    statusLabel = "▼ TOO HEAVY AND BUCKLES";
+    statusColor = "#ff6060";
+  }
 
   return (
     <div style={{
@@ -110,7 +157,6 @@ export default function VacuumAirshipCalc() {
         This entire thing was generated from one silly prompt to an AI. The math is almost certainly wrong. Do not build an airship based on this.
       </div>
 
-      {/* Header */}
       <div style={{
         background: "linear-gradient(180deg, #0d1117 0%, #0a0c0f 100%)",
         borderBottom: "1px solid rgba(0,255,180,0.15)",
@@ -123,7 +169,7 @@ export default function VacuumAirshipCalc() {
           GYROID CFRP VACUUM SPHERE
         </div>
         <div style={{ fontSize: 11, color: "#555", marginTop: 4 }}>
-          /theydidthemath · partial vacuum buoyancy · structural sizing
+          /theydidthemath · partial vacuum buoyancy · Zoelly buckling · structural sizing
         </div>
       </div>
 
@@ -149,10 +195,19 @@ export default function VacuumAirshipCalc() {
           <Slider label="Target Altitude" min={0} max={10000} step={100} value={altitude} onChange={setAltitude}
             format={v => `${(v * 3.28084 / 1000).toFixed(1)}k ft / ${(v/1000).toFixed(1)}km`} />
 
+          <div style={{ fontSize: 10, color: "#555", letterSpacing: "0.15em", borderBottom: "1px solid rgba(255,255,255,0.05)", paddingBottom: 8, marginTop: 4 }}>
+            BUCKLING MODEL
+          </div>
+
+          <Slider label="Knockdown Factor" min={0.1} max={0.8} step={0.05} value={knockdown} onChange={setKnockdown}
+            format={v => `${v.toFixed(2)} (${v <= 0.2 ? "conservative" : v <= 0.5 ? "moderate" : "optimistic"})`} />
+
           <div style={{ marginTop: 8, padding: "12px", background: "rgba(0,255,180,0.04)", border: "1px solid rgba(0,255,180,0.1)", borderRadius: 6, fontSize: 10, color: "#666", lineHeight: 1.8 }}>
             <div style={{ color: "#00ffb4", marginBottom: 4 }}>MATERIAL: CFRP (CARBON FIBER REINFORCED POLYMER)</div>
-            Bulk density: 1,600 kg/m³ · E ≈ 150–300 GPa<br />
+            Bulk density: 1,600 kg/m³<br />
+            E = 70 GPa (quasi-isotropic laminate) · ν = 0.3<br />
             Effective at {gyroidFill}% fill: <span style={{ color: "#ccc" }}>{(matDensity * gyroidFill / 100).toFixed(0)} kg/m³</span><br />
+            Gyroid E_eff (ρ² scaling): <span style={{ color: "#ccc" }}>{(E_eff / 1e9).toFixed(2)} GPa</span><br />
             Air @ altitude: <span style={{ color: "#ccc" }}>{rho_air.toFixed(3)} kg/m³</span>
           </div>
         </div>
@@ -169,15 +224,17 @@ export default function VacuumAirshipCalc() {
             display: "flex", alignItems: "center", justifyContent: "space-between"
           }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: feasible ? "#00ffb4" : "#ff6060", letterSpacing: "0.1em" }}>
-                {feasible ? "▲ POSITIVE LIFT — AIRWORTHY" : "▼ NEGATIVE LIFT — SINKS"}
+              <div style={{ fontSize: 12, fontWeight: 700, color: statusColor, letterSpacing: "0.1em" }}>
+                {statusLabel}
               </div>
               <div style={{ fontSize: 10, color: "#666", marginTop: 2 }}>
-                Neutral buoyancy shell thickness at these settings: {neutralThicknessCm.toFixed(2)} cm
-                {shellThicknessCm <= neutralThicknessCm ? " — your shell is within budget" : " — your shell is too heavy"}
+                Neutral buoyancy shell: {neutralThicknessCm.toFixed(2)} cm
+                {shellThicknessCm <= neutralThicknessCm ? " — within budget" : " — too heavy"}
+                {" · "}Buckling SF: {bucklingSF < 100 ? bucklingSF.toFixed(3) : "∞"}
+                {survivesBuckling ? " — survives" : " — collapses"}
               </div>
             </div>
-            <div style={{ fontSize: 28, fontWeight: 800, color: feasible ? "#00ffb4" : "#ff6060", fontFamily: "monospace" }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: statusColor, fontFamily: "monospace" }}>
               {netLiftTonnes > 0 ? "+" : ""}{formatNum(netLiftTonnes, 1)} t
             </div>
           </div>
@@ -189,40 +246,76 @@ export default function VacuumAirshipCalc() {
             <Stat label="Surface Area" value={formatNum(A_surface)} unit="m²" />
             <Stat label="Shell Mass" value={formatNum(shellMass)} unit="kg" warn={shellMass > displacedAirMass * 0.8} />
             <Stat label="Displaced Air" value={formatNum(displacedAirMass)} unit="kg" />
-            <Stat label="Net Payload Lift" value={formatNum(netLiftKg)} unit="kg" highlight={feasible} warn={!feasible} />
+            <Stat label="Net Payload Lift" value={formatNum(netLiftKg)} unit="kg" highlight={hasLift} warn={!hasLift} />
           </div>
 
-          {/* Chart */}
-          <div>
-            <div style={{ fontSize: 10, color: "#555", letterSpacing: "0.15em", marginBottom: 12 }}>
-              NET LIFT vs RADIUS — current shell/fill/pressure settings
-              {breakeven ? <span style={{ color: "#00ffb4", marginLeft: 12 }}>↑ BREAKEVEN AT r={breakeven}m</span> : <span style={{ color: "#ff6060", marginLeft: 12 }}>NO BREAKEVEN IN RANGE</span>}
+          {/* Buckling Stats */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            <Stat label="Net External P" value={formatPressure(P_net)} unit="" warn={P_net > P_buckle} />
+            <Stat label="Design P_buckle" value={formatPressure(P_buckle)} unit={`(${formatPressure(P_cr)} × ${knockdown})`}
+              warn={P_buckle < P_net} highlight={P_buckle >= P_net} />
+            <Stat label="Buckling SF" value={bucklingSF < 100 ? bucklingSF.toFixed(3) : "∞"} unit="≥ 1.0 req"
+              highlight={bucklingSF >= 1.5} warn={bucklingSF < 1.0} />
+          </div>
+
+          {/* Charts */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#555", letterSpacing: "0.15em", marginBottom: 12 }}>
+                NET LIFT vs RADIUS
+                {breakeven ? <span style={{ color: "#00ffb4", marginLeft: 8 }}>↑ LIFT AT r={breakeven}m</span> : <span style={{ color: "#ff6060", marginLeft: 8 }}>NO LIFT IN RANGE</span>}
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="r" stroke="#444" tick={{ fill: "#555", fontSize: 10 }} label={{ value: "radius (m)", fill: "#555", fontSize: 10, position: "insideBottom", offset: -2 }} />
+                  <YAxis stroke="#444" tick={{ fill: "#555", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}t`} />
+                  <Tooltip
+                    contentStyle={{ background: "#111", border: "1px solid #333", borderRadius: 4, fontSize: 11 }}
+                    formatter={(v, name) => [name === "lift" ? `${Number(v).toFixed(1)} tonnes` : Number(v).toFixed(3), name === "lift" ? "Net Lift" : "Buckling SF"]}
+                    labelFormatter={(v) => `r = ${v}m`}
+                  />
+                  <ReferenceLine y={0} stroke="rgba(0,255,180,0.4)" strokeDasharray="6 3" />
+                  <Line type="monotone" dataKey="lift" stroke="#00ffb4" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="r" stroke="#444" tick={{ fill: "#555", fontSize: 10 }} label={{ value: "radius (m)", fill: "#555", fontSize: 10, position: "insideBottom", offset: -2 }} />
-                <YAxis stroke="#444" tick={{ fill: "#555", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}t`} />
-                <Tooltip
-                  contentStyle={{ background: "#111", border: "1px solid #333", borderRadius: 4, fontSize: 11 }}
-                  formatter={(v) => [`${Number(v).toFixed(1)} tonnes`, "Net Lift"]}
-                  labelFormatter={(v) => `r = ${v}m`}
-                />
-                <ReferenceLine y={0} stroke="rgba(0,255,180,0.4)" strokeDasharray="6 3" />
-                <Line type="monotone" dataKey="lift" stroke="#00ffb4" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+
+            <div>
+              <div style={{ fontSize: 10, color: "#555", letterSpacing: "0.15em", marginBottom: 12 }}>
+                BUCKLING SAFETY FACTOR vs RADIUS
+                <span style={{ color: "#666", marginLeft: 8 }}>SF ≥ 1.0 = survives</span>
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="r" stroke="#444" tick={{ fill: "#555", fontSize: 10 }} label={{ value: "radius (m)", fill: "#555", fontSize: 10, position: "insideBottom", offset: -2 }} />
+                  <YAxis stroke="#444" tick={{ fill: "#555", fontSize: 10 }} domain={[0, 'auto']} tickFormatter={v => v.toFixed(1)} />
+                  <Tooltip
+                    contentStyle={{ background: "#111", border: "1px solid #333", borderRadius: 4, fontSize: 11 }}
+                    formatter={(v) => [Number(v).toFixed(3), "Buckling SF"]}
+                    labelFormatter={(v) => `r = ${v}m`}
+                  />
+                  <ReferenceLine y={1} stroke="rgba(255,180,0,0.6)" strokeDasharray="6 3" label={{ value: "SF=1", fill: "#776a40", fontSize: 9 }} />
+                  <Line type="monotone" dataKey="sf" stroke="#ff6060" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
           {/* Notes */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 10, color: "#555", lineHeight: 1.7 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, fontSize: 10, color: "#555", lineHeight: 1.7 }}>
             <div style={{ padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid rgba(255,255,255,0.05)" }}>
               <div style={{ color: "#777", marginBottom: 4 }}>WHY GYROID?</div>
-              Gyroid infill is triply periodic minimal surface — equal stiffness in all axes. Ideal for omni-directional pressure loads like atmospheric crush. Outperforms cubic/honeycomb for isotropic compression.
+              Triply periodic minimal surface — equal stiffness in all axes. Ideal for omni-directional pressure loads. Outperforms cubic/honeycomb for isotropic compression.
             </div>
             <div style={{ padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid rgba(255,255,255,0.05)" }}>
-              <div style={{ color: "#777", marginBottom: 4 }}>BUOYANCY CONTROL</div>
-              Partial vacuum (vs full) reduces shell stress and allows active altitude control — pump air in to descend, pump out to ascend. Internal pressure % directly trades structural load against lift.
+              <div style={{ color: "#777", marginBottom: 4 }}>BUCKLING (ZOELLY 1915)</div>
+              P_cr = 2E/√(3(1-ν²)) × (t/R)². Real shells buckle at 20-70% of theory due to geometric imperfections (NASA SP-8032). Gyroid E scales as ρ_rel² (bending-dominated).
+            </div>
+            <div style={{ padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid rgba(255,255,255,0.05)" }}>
+              <div style={{ color: "#777", marginBottom: 4 }}>THE HARD TRUTH</div>
+              Volume scales as r³ but shell area as r². Bigger spheres lift more per unit shell — but buckling resistance drops as (t/R)². These constraints fight each other, which is why vacuum airships remain theoretical.
             </div>
           </div>
         </div>
