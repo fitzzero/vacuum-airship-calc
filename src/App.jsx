@@ -106,6 +106,10 @@ export default function VacuumAirshipCalc() {
       padding: "0",
       color: "#ccc"
     }}>
+      <div style={{ padding: "8px 32px", background: "rgba(255,180,0,0.06)", borderBottom: "1px solid rgba(255,180,0,0.15)", fontSize: 11, color: "#776a40", textAlign: "center", fontFamily: "monospace" }}>
+        This entire thing was generated from one silly prompt to an AI. The math is almost certainly wrong. Do not build an airship based on this.
+      </div>
+
       {/* Header */}
       <div style={{
         background: "linear-gradient(180deg, #0d1117 0%, #0a0c0f 100%)",
@@ -220,10 +224,6 @@ export default function VacuumAirshipCalc() {
               <div style={{ color: "#777", marginBottom: 4 }}>BUOYANCY CONTROL</div>
               Partial vacuum (vs full) reduces shell stress and allows active altitude control — pump air in to descend, pump out to ascend. Internal pressure % directly trades structural load against lift.
             </div>
-          </div>
-
-          <div style={{ padding: "10px 14px", background: "rgba(255,180,0,0.04)", borderRadius: 6, border: "1px solid rgba(255,180,0,0.15)", fontSize: 10, color: "#776a40", lineHeight: 1.7, textAlign: "center" }}>
-            This entire thing was generated from one silly prompt to an AI. The math is almost certainly wrong. Do not build an airship based on this.
           </div>
         </div>
       </div>
