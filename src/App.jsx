@@ -304,18 +304,42 @@ export default function VacuumAirshipCalc() {
           </div>
 
           {/* Notes */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, fontSize: 10, color: "#555", lineHeight: 1.7 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 10, color: "#555", lineHeight: 1.7 }}>
             <div style={{ padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid rgba(255,255,255,0.05)" }}>
-              <div style={{ color: "#777", marginBottom: 4 }}>WHY GYROID?</div>
-              Triply periodic minimal surface — equal stiffness in all axes. Ideal for omni-directional pressure loads. Outperforms cubic/honeycomb for isotropic compression.
+              <div style={{ color: "#777", marginBottom: 4 }}>THE CORE PROBLEM: E/ρ²</div>
+              For a vacuum sphere to both float and resist buckling, the shell material needs E/ρ² ≥ ~630,000 Pa·m⁶/kg².
+              Even theoretical graphene (E=1 TPa, ρ=2200) only reaches ~207,000 — about 3× short before knockdown.
+              With realistic imperfection knockdown (0.2), you need ~15× better than graphene. No known material qualifies.
+              <br /><br />
+              <span style={{ color: "#666" }}>
+                CFRP: 27k · Beryllium: 84k · Diamond: 97k · Graphene: 207k · <span style={{ color: "#ff6060" }}>Need: 630k+</span>
+              </span>
             </div>
             <div style={{ padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid rgba(255,255,255,0.05)" }}>
-              <div style={{ color: "#777", marginBottom: 4 }}>BUCKLING (ZOELLY 1915)</div>
-              P_cr = 2E/√(3(1-ν²)) × (t/R)². Real shells buckle at 20-70% of theory due to geometric imperfections (NASA SP-8032). Gyroid E scales as ρ_rel² (bending-dominated).
+              <div style={{ color: "#777", marginBottom: 4 }}>WHY BUCKLING KILLS IT</div>
+              Zoelly (1915): P_cr = 2E/√(3(1-ν²)) × (t/R)². Buckling resistance scales with (t/R)² — but
+              making the shell thicker to survive pressure makes it too heavy to float. Real shells buckle at
+              20-70% of theoretical values due to geometric imperfections (NASA SP-8032), making the margin even worse.
+              Volume scales as r³ but surface as r² — bigger spheres lift more per unit shell, but the buckling
+              ratio (t/R) gets worse.
             </div>
-            <div style={{ padding: "10px 14px", background: "rgba(255,255,255,0.02)", borderRadius: 6, border: "1px solid rgba(255,255,255,0.05)" }}>
-              <div style={{ color: "#777", marginBottom: 4 }}>THE HARD TRUTH</div>
-              Volume scales as r³ but shell area as r². Bigger spheres lift more per unit shell — but buckling resistance drops as (t/R)². These constraints fight each other, which is why vacuum airships remain theoretical.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 10, color: "#555", lineHeight: 1.7 }}>
+            <div style={{ padding: "10px 14px", background: "rgba(0,255,180,0.03)", borderRadius: 6, border: "1px solid rgba(0,255,180,0.08)" }}>
+              <div style={{ color: "#00ffb4", marginBottom: 4 }}>PATH FORWARD: SANDWICH STRUCTURES</div>
+              The Zoelly formula assumes a homogeneous shell. Sandwich construction — two thin face sheets separated by a
+              lightweight core — has bending stiffness proportional to the <em>square</em> of the face sheet separation,
+              completely changing the scaling. MIT/NASA (2019) showed that discrete lattice structures make the
+              problem "strength-limited rather than stability-limited," dodging buckling entirely.
+              A gyroid core between CFRP face sheets is actually the right intuition.
+            </div>
+            <div style={{ padding: "10px 14px", background: "rgba(0,255,180,0.03)", borderRadius: 6, border: "1px solid rgba(0,255,180,0.08)" }}>
+              <div style={{ color: "#00ffb4", marginBottom: 4 }}>THE REAL BOTTLENECK: MANUFACTURING</div>
+              The physics works. The materials exist. What doesn't exist is the ability to 3D-print a 50m diameter
+              geodesic sandwich sphere with sub-millimeter precision. The knockdown factor (0.2 → 0.7) is entirely
+              about manufacturing quality — a perfect shell needs ~3× less material than a sloppy one. Advances in
+              large-format composite additive manufacturing and automated fiber placement are slowly closing this gap.
+              The problem is fabrication, not physics.
             </div>
           </div>
         </div>
